@@ -1,156 +1,210 @@
 <!doctype html>
 <html lang="ja">
+<head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>みとくけん ダッシュボード</title>
-
-<!-- MQTT.js (browser) -->
-<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>みとくけんダッシュボード（Web=B機）</title>
 <style>
-  :root { --ok:#0aa84f; --warn:#c62828; --bg:#0b0e12; --card:#12161c; --text:#e8eef6; }
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;}
-  header{padding:16px 20px;border-bottom:1px solid #1e2630;}
-  main{max-width:900px;margin:0 auto;padding:24px 16px;display:grid;gap:16px;}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .card{background:var(--card);border:1px solid #1e2630;border-radius:14px;padding:18px;}
-  .title{font-weight:700;font-size:18px;margin:0 0 6px}
-  .muted{opacity:.7;font-size:13px;margin:0 0 8px}
-  .status{display:flex;align-items:center;gap:8px;margin-top:8px}
-  .dot{width:12px;height:12px;border-radius:999px;background:#999}
-  .dot.ok{background:var(--ok)}
-  .dot.bad{background:var(--warn);animation:blink 0.8s infinite}
-  @keyframes blink{50%{opacity:.4}}
-  #bigAlert{position:fixed;inset:0;pointer-events:none;opacity:0;background:rgba(198,40,40,.20);transition:opacity .12s}
-  #bigAlert.show{opacity:1}
-  button{background:#1f2937;color:#e8eef6;border:1px solid #324055;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
-  button:hover{filter:brightness(1.15)}
-  code{background:#0f141a;padding:2px 6px;border-radius:6px}
-  .log{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap}
+  :root {
+    --ok:#11a36a;
+    --warn:#ff3b30;
+    --bg:#0f1115;
+    --fg:#e6e9ee;
+    --muted:#8b90a0;
+    --card:#171a21;
+    --accent:#3b82f6;
+  }
+  html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif; }
+  .wrap { max-width:880px; margin:0 auto; padding:20px; }
+  h1 { font-size:22px; margin:8px 0 16px; font-weight:700; }
+  .row { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+  .card { background:var(--card); border-radius:14px; padding:16px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+  .label { font-size:12px; color:var(--muted); letter-spacing:.02em; }
+  .value { font-size:28px; font-weight:800; margin-top:6px; }
+  .ok { color:var(--ok); }
+  .bad { color:var(--warn); }
+  .btnrow { display:flex; gap:12px; flex-wrap:wrap; margin-top:14px; }
+  button { appearance:none; border:0; border-radius:12px; padding:12px 16px; font-weight:700; cursor:pointer; color:#fff; background:var(--accent); }
+  button.secondary { background:#2d3444; color:#cfd5e2; }
+  .status { margin-top:16px; font-size:13px; color:var(--muted); line-height:1.6; }
+  .banner { margin:16px 0; padding:14px; border-radius:12px; background:#1c2230; display:flex; align-items:center; gap:12px; }
+  .dot { width:10px; height:10px; border-radius:999px; background:var(--ok); box-shadow:0 0 0 0 rgba(17,163,106,.8); }
+  .blink { animation: blink 1s linear infinite; }
+  @keyframes blink { 50% { opacity:.25 } }
+  .alarm { background:var(--warn); box-shadow:0 0 16px var(--warn); }
+  a { color:#9fc1ff; text-decoration: none; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>みとくけん ダッシュボード（Web = B機）</h1>
 
-<header>
-  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-    <h1 style="font-size:20px;margin:0">みとくけん ダッシュボード</h1>
-    <div style="display:flex;gap:8px;align-items:center">
-      <button id="btnNotify">🔔 通知ON</button>
-      <button id="btnTest">デモ警報</button>
+  <div class="banner">
+    <div id="connDot" class="dot"></div>
+    <div>
+      <div class="label">接続状態</div>
+      <div id="connText" class="value ok">未接続</div>
     </div>
   </div>
-  <div class="muted">MQTT: <code>wss://test.mosquitto.org:8081/mqtt</code> / Topic: <code>mitokuken/alert</code>, <code>mitokuken/ack</code></div>
-</header>
 
-<main>
   <div class="row">
-    <section class="card">
-      <h2 class="title">受信状態</h2>
-      <div class="muted">A 機（衝撃検知） / B 機（解除）</div>
-      <div class="status"><span class="dot" id="dotConn"></span><span id="txtConn">接続中…</span></div>
-      <div class="status"><span class="dot" id="dotA"></span><span id="txtA">A: 待機</span></div>
-      <div class="status"><span class="dot" id="dotB"></span><span id="txtB">B: 待機</span></div>
-    </section>
-    <section class="card">
-      <h2 class="title">最新イベント</h2>
-      <div id="lastEvent" class="muted">—</div>
-      <audio id="beep" preload="auto">
-        <source src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABYBHQAA" type="audio/wav">
-      </audio>
-    </section>
+    <div class="card">
+      <div class="label">A機（送信元）</div>
+      <div id="aState" class="value">待機</div>
+      <div class="status">
+        最終受信: <span id="aTime" class="mono">—</span><br/>
+        受信加速度: <span id="aAccel" class="mono">—</span> g
+      </div>
+      <div class="btnrow">
+        <button id="startBtn">監視開始（音を有効化 & 接続）</button>
+        <button id="muteBtn" class="secondary">音をミュート</button>
+        <button id="resetBtn" class="secondary">解除（コマンド送信）</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">アラーム</div>
+      <div id="alarmState" class="value ok">停止中</div>
+      <div class="status">
+        トピック: <span class="mono">mitokuken/alert</span><br/>
+        ブローカー: <span class="mono">wss://test.mosquitto.org:8081</span>
+      </div>
+    </div>
   </div>
-  <section class="card">
-    <h2 class="title">ログ</h2>
-    <div id="log" class="log"></div>
-  </section>
-</main>
 
-<div id="bigAlert"></div>
+  <div class="status">
+    ※ 初回は「監視開始」を押してから衝撃を与えてください（ブラウザの自動再生制限のため音が鳴る許可が必要）<br/>
+    ※ 公開ブローカー利用のため、他者のメッセージが混ざる可能性があります。実運用は認証付きMQTT推奨です。
+  </div>
+</div>
 
+<!-- MQTT.js (WebSocket) -->
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 <script>
-/** ========= 設定 ========= **/
-const MQTT_URL   = "wss://test.mosquitto.org:8081/mqtt";   // TLS WebSocket
-const TOPIC_ALERT= "mitokuken/alert";  // A 機 → 衝撃
-const TOPIC_ACK  = "mitokuken/ack";    // B 機 → 解除（※後述のBパッチ）
+  // ---- 設定 ----
+  const BROKER_URL = "wss://test.mosquitto.org:8081";
+  const TOPIC_RX   = "mitokuken/alert"; // A機→Web
+  const TOPIC_TX   = "mitokuken/cmd";   // Web→A機（解除など）
+  const CLIENT_ID  = "mitokuken_web_" + Math.random().toString(16).slice(2);
 
-/** ========= UI 参照 ========= **/
-const dotConn = document.getElementById('dotConn');
-const dotA    = document.getElementById('dotA');
-const dotB    = document.getElementById('dotB');
-const txtConn = document.getElementById('txtConn');
-const txtA    = document.getElementById('txtA');
-const txtB    = document.getElementById('txtB');
-const lastEvent = document.getElementById('lastEvent');
-const logEl   = document.getElementById('log');
-const bigAlert= document.getElementById('bigAlert');
-const beepEl  = document.getElementById('beep');
+  // ---- 要素参照 ----
+  const connDot   = document.getElementById('connDot');
+  const connText  = document.getElementById('connText');
+  const aStateEl  = document.getElementById('aState');
+  const aTimeEl   = document.getElementById('aTime');
+  const aAccelEl  = document.getElementById('aAccel');
+  const alarmEl   = document.getElementById('alarmState');
+  const startBtn  = document.getElementById('startBtn');
+  const muteBtn   = document.getElementById('muteBtn');
+  const resetBtn  = document.getElementById('resetBtn');
 
-function log(s){ const t=`[${new Date().toLocaleTimeString()}] ${s}\n`; logEl.textContent = t + logEl.textContent.slice(0, 6000); }
-
-function setDot(el, ok){ el.classList.remove('ok','bad'); el.classList.add(ok?'ok':'bad'); }
-
-function flashAlert(ms=1200){
-  bigAlert.classList.add('show');
-  setTimeout(()=>bigAlert.classList.remove('show'), ms);
-}
-
-async function notify(title, body){
-  try{
-    if(Notification.permission==='granted'){
-      new Notification(title,{body});
-    }
-  }catch(e){}
-}
-
-document.getElementById('btnNotify').onclick = async ()=>{
-  if(Notification.permission!=='granted') await Notification.requestPermission();
-  alert('通知を許可しました（ブラウザの設定でいつでも変更できます）。');
-};
-
-document.getElementById('btnTest').onclick = ()=>{
-  onAlert({src:'DEMO', accel:1.88, ts:Date.now()});
-};
-
-/** ========= MQTT 接続 ========= **/
-const clientId = "dash_" + Math.random().toString(16).slice(2);
-const client = mqtt.connect(MQTT_URL, { clientId, clean:true, reconnectPeriod: 1500 });
-
-client.on('connect', ()=>{
-  setDot(dotConn,true); txtConn.textContent = "接続 OK";
-  client.subscribe([TOPIC_ALERT, TOPIC_ACK], { qos:0 }, (err)=> {
-    if(err){ log("subscribe error: "+err); }
-    else { log("Subscribed: " + TOPIC_ALERT + ", " + TOPIC_ACK); }
-  });
-});
-
-client.on('reconnect', ()=>{ setDot(dotConn,false); txtConn.textContent = "再接続中…"; });
-client.on('close', ()=>{ setDot(dotConn,false); txtConn.textContent = "切断"; });
-client.on('error', (e)=> log("MQTT error: "+e.message));
-
-client.on('message', (topic, payload)=>{
-  let s = payload.toString();
-  log(`RX ${topic}: ${s}`);
-
-  try{
-    const j = JSON.parse(s);
-    if (topic === TOPIC_ALERT) onAlert(j);
-    if (topic === TOPIC_ACK)   onAck(j);
-  }catch{
-    // JSONでない場合は簡易扱い
-    if (topic === TOPIC_ALERT) onAlert({src:'A?', accel:NaN, ts:Date.now(), raw:s});
-    if (topic === TOPIC_ACK)   onAck({src:'B?', ts:Date.now(), raw:s});
+  // ---- サウンド準備（ユーザー操作で解放）----
+  let audioCtx, osc, gain;
+  let muted = false;
+  function initAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    gain = audioCtx.createGain();
+    gain.gain.value = 0;
+    gain.connect(audioCtx.destination);
+    osc = audioCtx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = 880;   // アラーム音
+    osc.connect(gain);
+    osc.start();
   }
-});
+  function alarmOn()  { if (!muted && gain) { gain.gain.setTargetAtTime(0.15, audioCtx.currentTime, 0.01); } }
+  function alarmOff() { if (gain)          { gain.gain.setTargetAtTime(0.0,  audioCtx.currentTime, 0.02); } }
 
-function onAlert(ev){
-  setDot(dotA,false); txtA.textContent = `A: 衝撃！ g=${ev.accel??'?'}`;
-  lastEvent.textContent = `A 衝撃 g=${ev.accel??'?'}  @ ${new Date(ev.ts||Date.now()).toLocaleString()}`;
-  flashAlert();
-  try{ beepEl.currentTime=0; beepEl.play(); }catch(e){}
-  notify("⚠ 衝撃を検知", `g=${ev.accel ?? '?'}`);
-}
+  muteBtn.onclick = () => {
+    muted = !muted;
+    muteBtn.textContent = muted ? "音をミュート解除" : "音をミュート";
+    if (muted) alarmOff();
+  };
 
-function onAck(ev){
-  setDot(dotB,true); txtB.textContent = "B: 解除";
-  lastEvent.textContent = `B 解除 @ ${new Date(ev.ts||Date.now()).toLocaleString()}`;
-}
+  // ---- MQTT 接続（監視開始で実行）----
+  let client = null;
+  startBtn.onclick = async () => {
+    initAudio();
+    try { await audioCtx.resume(); } catch(e){}
+    connectMQTT();
+  };
+
+  function connectMQTT() {
+    if (client && client.connected) return;
+    connText.textContent = "接続中…";
+    connText.classList.remove('ok'); connText.classList.remove('bad');
+    connDot.classList.add('blink'); connDot.classList.remove('alarm');
+
+    client = mqtt.connect(BROKER_URL, {
+      clientId: CLIENT_ID,
+      clean: true,
+      reconnectPeriod: 2000,
+    });
+
+    client.on('connect', () => {
+      connText.textContent = "接続OK";
+      connText.classList.add('ok');
+      connDot.classList.remove('blink'); connDot.style.background = "var(--ok)";
+      client.subscribe(TOPIC_RX);
+    });
+
+    client.on('reconnect', () => {
+      connText.textContent = "再接続中…";
+      connText.classList.remove('ok'); connText.classList.remove('bad');
+      connDot.classList.add('blink');
+    });
+
+    client.on('close', () => {
+      connText.textContent = "未接続";
+      connText.classList.remove('ok'); connText.classList.add('bad');
+      connDot.classList.add('blink'); connDot.style.background = "var(--warn)";
+      alarmOff();
+      alarmEl.textContent = "停止中";
+      alarmEl.classList.remove('bad'); alarmEl.classList.add('ok');
+      aStateEl.textContent = "待機";
+    });
+
+    client.on('message', (topic, payload) => {
+      if (topic !== TOPIC_RX) return;
+      let msg = null;
+      try { msg = JSON.parse(payload.toString()); } catch(e){ return; }
+
+      const now = new Date();
+      aTimeEl.textContent  = now.toLocaleTimeString();
+      aAccelEl.textContent = (msg.accel ?? 0).toFixed(2);
+
+      if (msg.type === "alert") {
+        // アラーム発火
+        aStateEl.textContent = "警報受信";
+        aStateEl.classList.add('bad');
+        alarmEl.textContent = "鳴動中";
+        alarmEl.classList.remove('ok'); alarmEl.classList.add('bad');
+        document.body.classList.add('blink');
+        connDot.classList.add('alarm');
+        alarmOn();
+      } else if (msg.type === "reset") {
+        clearAlarmUI();
+      }
+    });
+
+    resetBtn.onclick = () => {
+      if (!client || !client.connected) return;
+      client.publish(TOPIC_TX, JSON.stringify({ type:"reset", ts: Date.now(), src:"web" }));
+      clearAlarmUI();
+    };
+  }
+
+  function clearAlarmUI() {
+    alarmOff();
+    alarmEl.textContent = "停止中";
+    alarmEl.classList.remove('bad'); alarmEl.classList.add('ok');
+    aStateEl.textContent = "待機";
+    aStateEl.classList.remove('bad');
+    document.body.classList.remove('blink');
+    connDot.classList.remove('alarm');
+  }
 </script>
+</body>
 </html>
