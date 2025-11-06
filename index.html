@@ -2,158 +2,106 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Core2 Dashboard</title>
+  <title>M5Core2 双方向テスト</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; background:#0f172a; color:#e2e8f0; }
-    .row { display: flex; gap: 20px; flex-wrap: wrap; }
-    .card { border: 1px solid #334155; border-radius: 12px; padding: 14px; min-width: 300px; background:#111827; }
-    label { display:block; margin-top:8px; font-size:14px; color:#94a3b8; }
-    input[type=text], input[type=number] { width: 100%; padding:8px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e2e8f0; }
-    button { padding: 10px 14px; margin-top: 10px; border:0; border-radius:10px; background:#2563eb; color:white; cursor:pointer; }
-    button:disabled { background:#475569; cursor:not-allowed; }
-    pre { white-space: pre-wrap; word-break: break-word; background:#0b1220; border:1px solid #334155; border-radius:8px; padding:8px; }
-    code { color:#93c5fd; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto;color:#e5e7eb;background:#0f172a;margin:0;padding:24px}
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .card{background:#111827;border:1px solid #334155;border-radius:12px;padding:16px;min-width:300px;flex:1}
+    input,button{padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb}
+    button{border:0;background:#1f2937;cursor:pointer}
+    .log{height:220px;overflow:auto;background:#0b1220;border:1px solid #334155;border-radius:8px;padding:10px;font-family:ui-monospace,Menlo,Consolas,monospace}
+    label{font-size:12px;color:#94a3b8}
   </style>
 </head>
 <body>
-  <h1>Core2 ダッシュボード（固定ID版）</h1>
-
+  <h2>M5Core2 ↔ Web（MQTT/WSS）テスト</h2>
   <div class="row">
     <div class="card">
-      <h3>接続設定</h3>
-      <label>WebSocket（HiveMQ WSS）</label>
-      <input id="wsUrl" type="text" value="wss://broker.hivemq.com:8884/mqtt" />
-      <label>デバイスID</label>
-      <input id="deviceId" type="text" value="core2-1fd62104" />
-      <button id="btnConnect" disabled>接続</button>
-      <div id="status" style="margin-top:8px;">ライブラリ読込中…</div>
-      <div style="margin-top:8px; font-size:12px; color:#94a3b8;">予備：<code>wss://broker.emqx.io:8084/mqtt</code></div>
+      <label>Device ID（Core2側と合わせる）</label>
+      <input id="devId" placeholder="segawa-core2-01" value="segawa-core2-01" />
+      <div style="margin-top:8px">
+        <button id="btnConn">Connect</button>
+        <span id="status" style="margin-left:8px;color:#93c5fd">Disconnected</span>
+      </div>
+      <div style="margin-top:12px;font-size:14px;color:#94a3b8">
+        Broker: <code>wss://test.mosquitto.org:8081</code>
+      </div>
+      <div style="margin-top:12px">
+        <div><label>Send Command</label></div>
+        <button data-cmd='{"cmd":"beep"}'>Beep</button>
+        <button data-cmd='{"cmd":"flash"}'>Flash</button>
+        <input id="textMsg" placeholder='表示するテキスト'/>
+        <button id="btnPrint">Print</button>
+      </div>
     </div>
-
     <div class="card">
-      <h3>受信ログ</h3>
-      <div>Subscribe Topic: <code id="subTopic">-</code></div>
-      <pre id="telemetry" style="height:220px; overflow:auto;">（まだありません）</pre>
-    </div>
-
-    <div class="card">
-      <h3>送信（Web → Core2）</h3>
-      <div>Publish Topic: <code id="pubTopic">-</code></div>
-      <label>action</label>
-      <input id="action" type="text" value="beep" />
-      <label>freq</label>
-      <input id="freq" type="number" value="1500" />
-      <label>ms</label>
-      <input id="ms" type="number" value="200" />
-      <button id="btnSend" disabled>テスト音を鳴らす</button>
-    </div>
-
-    <div class="card">
-      <h3>エラー/詳細</h3>
-      <pre id="err" style="height:120px; overflow:auto;"></pre>
+      <div><label>Events / Telemetry</label></div>
+      <div id="log" class="log"></div>
     </div>
   </div>
 
-  <!-- ✅ PahoをCDN冗長化：unpkg → 失敗時は jsDelivr に自動切替 -->
+  <!-- Paho MQTT over WebSocket -->
+  <script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
   <script>
-    (function loadPaho() {
-      const s = document.createElement('script');
-      s.src = 'https://unpkg.com/paho-mqtt/mqttws31.min.js';
-      s.defer = true;
-      s.onload = () => {
-        document.getElementById('status').textContent = 'ライブラリ読込OK';
-        document.getElementById('btnConnect').disabled = false;
-      };
-      s.onerror = () => {
-        const f = document.createElement('script');
-        // jsDelivr の代替（バージョン固定で安定）
-        f.src = 'https://cdn.jsdelivr.net/npm/paho-mqtt@1.1.0/paho-mqtt-min.js';
-        f.defer = true;
-        f.onload = () => {
-          document.getElementById('status').textContent = 'ライブラリ読込OK（fallback）';
-          document.getElementById('btnConnect').disabled = false;
-        };
-        f.onerror = () => {
-          document.getElementById('status').textContent = 'Pahoの読み込みに失敗しました。拡張機能やネットワーク設定を確認してください。';
-          const e = document.getElementById('err');
-          e.textContent = 'CDN読み込み失敗: unpkg / jsDelivr の両方に接続できませんでした。';
-        };
-        document.head.appendChild(f);
-      };
-      document.head.appendChild(s);
-    })();
-  </script>
-
-  <script>
+    const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('log');
+    const devIdEl = document.getElementById('devId');
     let client = null;
-    let subTopic = "";
-    let pubTopic = "";
-    const $ = (id) => document.getElementById(id);
-    const logErr = (m) => { const e=$('err'); e.textContent=(m+"\n"+e.textContent).slice(0,8000); };
-    const logTel = (m) => { const t=$('telemetry'); t.textContent=(m+"\n"+t.textContent).slice(0,8000); };
+    let base = null;
 
-    $('btnConnect').onclick = () => {
-      // まだPahoが無ければ弾く（ガード）
-      if (typeof window.Paho === 'undefined') {
-        logErr('Paho is not defined（ライブラリが読み込めていません）');
-        $('status').textContent = 'Paho未読込';
-        return;
-      }
+    function log(line){
+      const t = new Date().toLocaleTimeString();
+      logEl.innerText = `[${t}] ${line}\n` + logEl.innerText;
+    }
 
-      const wsUrl    = $('wsUrl').value.trim();
-      const deviceId = $('deviceId').value.trim();
-      if (!wsUrl || !deviceId) { alert('WS URLとDevice IDを入れてね'); return; }
-
-      subTopic = `lab/core2/${deviceId}/telemetry`;
-      pubTopic = `lab/core2/${deviceId}/cmd`;
-      $('subTopic').textContent = subTopic;
-      $('pubTopic').textContent = pubTopic;
-
-      const cid = "web-" + Math.random().toString(16).slice(2);
-      client = new Paho.MQTT.Client(wsUrl, cid);
-
-      client.onConnectionLost = (res) => {
-        $('status').textContent = "切断: " + (res?.errorMessage || "");
-        logErr("onConnectionLost: " + (res?.errorMessage || ""));
-        $('btnSend').disabled = true;
+    function connect(){
+      const devId = devIdEl.value.trim();
+      if(!devId){ alert('Device ID を入力'); return; }
+      base = `m5core2/${devId}`;
+      const cid = 'web-' + Math.random().toString(16).slice(2);
+      client = new Paho.MQTT.Client('test.mosquitto.org', 8081, cid);
+      client.onConnectionLost = (res)=>{ statusEl.textContent='Disconnected'; log('Connection lost'); }
+      client.onMessageArrived = (msg)=>{
+        log(`${msg.destinationName} ${msg.payloadString}`);
       };
-
-      client.onMessageArrived = (msg) => {
-        if (msg.destinationName === subTopic) logTel(msg.payloadString);
-      };
-
-      $('status').textContent = "接続中…";
+      statusEl.textContent='Connecting...';
       client.connect({
-        useSSL: wsUrl.startsWith("wss://"),
-        mqttVersion: 4,           // MQTT 3.1.1
-        cleanSession: true,
-        keepAliveInterval: 45,
-        reconnect: true,
-        timeout: 10,
-        onSuccess: () => {
-          $('status').textContent = "接続OK";
-          client.subscribe(subTopic);
-          $('btnSend').disabled = false;
+        useSSL:true,
+        timeout:8,
+        onSuccess: ()=>{
+          statusEl.textContent='Connected';
+          const topics = [`${base}/events`, `${base}/telemetry`];
+          topics.forEach(tp=> client.subscribe(tp));
+          log('Subscribed: ' + topics.join(', '));
         },
-        onFailure: (err) => {
-          const emsg = "接続失敗: " + (err?.errorMessage || "");
-          $('status').textContent = emsg;
-          logErr(emsg);
-        }
+        onFailure: (err)=>{ statusEl.textContent='Failed'; log('Connect failed: '+ JSON.stringify(err)); }
       });
-    };
+    }
 
-    $('btnSend').onclick = () => {
-      if (!client || !client.isConnected()) { alert("未接続です"); return; }
-      const payload = JSON.stringify({
-        action: $('action').value.trim(),
-        freq: Number($('freq').value),
-        ms: Number($('ms').value),
-        ts: Date.now()
-      });
-      const msg = new Paho.MQTT.Message(payload);
-      msg.destinationName = pubTopic;
-      client.send(msg);
+    document.getElementById('btnConn').onclick = connect;
+
+    // 固定コマンド
+    document.querySelectorAll('button[data-cmd]').forEach(btn=>{
+      btn.onclick = ()=>{
+        if(!client){ alert('Connect first'); return; }
+        const cmd = btn.getAttribute('data-cmd');
+        const m = new Paho.MQTT.Message(cmd);
+        m.destinationName = `${base}/cmd`;
+        client.send(m);
+        log(`→ ${base}/cmd ${cmd}`);
+      };
+    });
+
+    // 任意テキスト表示
+    document.getElementById('btnPrint').onclick = ()=>{
+      if(!client){ alert('Connect first'); return; }
+      const text = document.getElementById('textMsg').value || 'Hello from Web';
+      const payload = JSON.stringify({cmd:'print', text});
+      const m = new Paho.MQTT.Message(payload);
+      m.destinationName = `${base}/cmd`;
+      client.send(m);
+      log(`→ ${base}/cmd ${payload}`);
     };
   </script>
 </body>
