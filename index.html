@@ -1,122 +1,108 @@
 <!doctype html>
-<html lang="ja">
+<html>
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>みとくけん・簡易ダッシュボード</title>
+  <title>Core2 Dashboard</title>
   <style>
-    body{margin:0;background:#0f172a;color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
-    .wrap{max-width:900px;margin:32px auto;padding:0 16px}
-    h1{font-weight:700;margin:0 0 12px}
-    .card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px;margin:12px 0}
-    .ok{color:#22c55e} .ng{color:#ef4444} .warn{color:#f59e0b}
-    pre{white-space:pre-wrap;word-break:break-word;background:#0b1020;border:1px solid #1f2937;border-radius:8px;padding:12px}
-    button{background:#2563eb;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:600;cursor:pointer}
-    button:disabled{opacity:.6;cursor:not-allowed}
+    body { font-family: system-ui, sans-serif; padding: 16px; }
+    .row { display: flex; gap: 20px; flex-wrap: wrap; }
+    .card { border: 1px solid #ccc; border-radius: 10px; padding: 12px; min-width: 280px; }
+    label { display:block; margin-top:8px; }
+    input[type=text], input[type=number] { width: 100%; padding:6px; }
+    button { padding: 8px 12px; margin-top: 8px; }
+    pre { white-space: pre-wrap; word-break: break-word; }
   </style>
-  <!-- MQTT over WebSocket ライブラリ -->
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 </head>
 <body>
-  <div class="wrap">
-    <h1>みとくけん ダッシュボード（最小テスト）</h1>
+  <h1>M5Stack Core2 Dashboard</h1>
 
+  <div class="row">
     <div class="card">
-      <div>WebSocket 接続先：<code id="url">wss://mqtt.eclipseprojects.io:443/mqtt</code></div>
-      <div>トピック：<code id="topic">mitokuken/alert</code></div>
-      <div id="state" class="warn" style="margin-top:8px">接続中…</div>
-      <div style="margin-top:12px">
-        <button id="beep" disabled>テスト音を鳴らす</button>
-      </div>
+      <h3>接続設定</h3>
+      <label>WebSocket URL（例: <code>wss://broker.hivemq.com:8884/mqtt</code>）</label>
+      <input id="wsUrl" type="text" value="wss://broker.hivemq.com:8884/mqtt" />
+      <label>デバイスID</label>
+      <input id="deviceId" type="text" placeholder="core2-xxxxxxxx" />
+      <button id="btnConnect">接続</button>
+      <div id="status">未接続</div>
     </div>
 
     <div class="card">
-      <div style="font-weight:700;margin-bottom:6px">受信ログ</div>
-      <pre id="log">(まだありません)</pre>
+      <h3>受信（テレメトリ）</h3>
+      <div>Subscribe Topic: <code id="subTopic">-</code></div>
+      <pre id="telemetry" style="height:160px; overflow:auto;"></pre>
     </div>
 
     <div class="card">
-      <div style="font-weight:700;margin-bottom:6px">エラー/詳細</div>
-      <pre id="err">(なし)</pre>
+      <h3>送信（コマンド）</h3>
+      <div>Publish Topic: <code id="pubTopic">-</code></div>
+      <label>アクション</label>
+      <input id="action" type="text" value="beep" />
+      <label>freq</label>
+      <input id="freq" type="number" value="1500" />
+      <label>ms</label>
+      <input id="ms" type="number" value="200" />
+      <button id="btnSend">送信</button>
     </div>
   </div>
 
+  <!-- Paho MQTT JS（公式CDN） -->
+  <script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
   <script>
-    // ===== 設定 =====
-    const BROKER_URL = "wss://mqtt.eclipseprojects.io:443/mqtt";
-    const TOPIC      = "mitokuken/alert";
+    let client = null;
+    let subTopic = "";
+    let pubTopic = "";
 
-    // ===== 画面ユーティリティ =====
-    const $state = document.getElementById("state");
-    const $log   = document.getElementById("log");
-    const $err   = document.getElementById("err");
-    const $beep  = document.getElementById("beep");
-    const beep = () => {
-      try {
-        const a = new (window.AudioContext || window.webkitAudioContext)();
-        const o = a.createOscillator();
-        const g = a.createGain();
-        o.type = "sine"; o.frequency.value = 880;
-        o.connect(g); g.connect(a.destination);
-        g.gain.setValueAtTime(0.0001, a.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.4, a.currentTime + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, a.currentTime + 0.25);
-        o.start(); o.stop(a.currentTime + 0.27);
-      } catch (e) { /* 音失敗は無視 */ }
+    function logTelemetry(line) {
+      const pre = document.getElementById('telemetry');
+      pre.textContent = (line + "\n" + pre.textContent).slice(0, 8000);
+    }
+
+    document.getElementById('btnConnect').onclick = () => {
+      const wsUrl   = document.getElementById('wsUrl').value.trim();
+      const deviceId= document.getElementById('deviceId').value.trim();
+      if (!wsUrl || !deviceId) { alert("WS URLとDevice IDを入れてね"); return; }
+
+      subTopic = `lab/core2/${deviceId}/telemetry`;
+      pubTopic = `lab/core2/${deviceId}/cmd`;
+      document.getElementById('subTopic').textContent = subTopic;
+      document.getElementById('pubTopic').textContent = pubTopic;
+
+      // 一意なクライアントID
+      const cid = "web-" + Math.random().toString(16).slice(2);
+      client = new Paho.MQTT.Client(wsUrl, cid);
+
+      client.onConnectionLost = (res) => {
+        document.getElementById('status').textContent = "切断: " + res.errorMessage;
+      };
+      client.onMessageArrived = (msg) => {
+        if (msg.destinationName === subTopic) {
+          logTelemetry(msg.payloadString);
+        }
+      };
+
+      client.connect({
+        useSSL: wsUrl.startsWith("wss://"),
+        timeout: 5,
+        onSuccess: () => {
+          document.getElementById('status').textContent = "接続OK";
+          client.subscribe(subTopic);
+        },
+        onFailure: (err) => {
+          document.getElementById('status').textContent = "接続失敗: " + err.errorMessage;
+        }
+      });
     };
-    $beep.onclick = beep;
 
-    function setState(text, cls){ $state.textContent = text; $state.className = cls || ""; }
-    function pushLog(s){
-      $log.textContent = ($log.textContent==="(まだありません)"?"":$log.textContent+"\n") + s;
-    }
-    function pushErr(e){
-      const msg = (e && e.message) ? e.message : String(e);
-      $err.textContent = ($err.textContent==="(なし)"?"":$err.textContent+"\n") + msg;
-    }
-
-    // ===== MQTT 接続 =====
-    let client;
-    try {
-      client = mqtt.connect(BROKER_URL, {
-        clientId: "mitokuken-web-" + Math.random().toString(16).slice(2),
-        keepalive: 60,
-        clean: true,
-        reconnectPeriod: 2000,
-        connectTimeout: 8000,
-      });
-    } catch (e) {
-      setState("接続初期化エラー", "ng"); pushErr(e); throw e;
-    }
-
-    client.on("connect", () => {
-      setState("接続済み", "ok");
-      $beep.disabled = false;
-      client.subscribe(TOPIC, { qos: 0 }, (err) => {
-        if (err) { pushErr("subscribe 失敗: " + err.message); setState("購読失敗", "ng"); }
-      });
-    });
-
-    client.on("reconnect", () => setState("再接続中…", "warn"));
-    client.on("close",     () => setState("切断", "ng"));
-    client.on("error",     (e) => { setState("エラー", "ng"); pushErr(e); });
-
-    client.on("message", (_topic, payload) => {
-      let text;
-      try {
-        text = new TextDecoder().decode(payload);
-        const obj = JSON.parse(text);
-        pushLog(`[${new Date().toLocaleTimeString()}] ${text}`);
-        // 受信したら音を1回
-        beep();
-      } catch (e) {
-        pushErr("JSONパース失敗: " + e.message + " / raw=" + text);
-      }
-    });
-
-    // 参考：手動送信（コンソールから）
-    window._pub = (obj={type:"alert",accel:1.5,ts:Date.now(),src:"TEST"})=>{
-      client.publish(TOPIC, JSON.stringify(obj));
+    document.getElementById('btnSend').onclick = () => {
+      if (!client || !client.isConnected()) { alert("未接続です"); return; }
+      const action = document.getElementById('action').value.trim();
+      const freq   = Number(document.getElementById('freq').value);
+      const ms     = Number(document.getElementById('ms').value);
+      const payload = JSON.stringify({ action, freq, ms, ts: Date.now() });
+      const msg = new Paho.MQTT.Message(payload);
+      msg.destinationName = pubTopic;
+      client.send(msg);
     };
   </script>
 </body>
