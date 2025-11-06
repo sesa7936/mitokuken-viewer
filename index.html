@@ -4,68 +4,118 @@
   <meta charset="utf-8" />
   <title>M5Core2 MQTT Dashboard</title>
 
-  <!-- ✅ Paho MQTT 読み込み（絶対必要） -->
+  <!-- ✅ Paho MQTT（必須） -->
   <script src="https://unpkg.com/paho-mqtt/paho-mqtt.min.js"></script>
 
   <style>
     body{background:#0f172a;color:#e2e8f0;font-family:system-ui;padding:20px;}
     input,button{padding:10px;margin:5px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:white;}
     .log{height:300px;overflow:auto;background:#0b1220;padding:10px;border-radius:8px;}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .card{background:#111827;border:1px solid #334155;border-radius:12px;padding:16px;min-width:320px}
   </style>
 </head>
 <body>
 
 <h2>M5Core2 ↔ Web（HiveMQ WSS）</h2>
 
-<div>
-  Device ID:
-  <input id="devId" value="segawa-core2-01">
-  <button onclick="connectMQTT()">Connect</button>
-  <span id="status">Disconnected</span>
+<div class="row">
+  <div class="card">
+    <div>
+      Device ID:
+      <input id="devId" value="segawa-core2-01">
+      <button id="btnConn">Connect</button>
+      <span id="status">Disconnected</span>
+    </div>
+
+    <div style="margin-top:8px">
+      <button data-cmd='{"cmd":"beep"}'>Beep</button>
+      <button data-cmd='{"cmd":"flash"}'>Flash</button>
+      <input id="textMsg" placeholder="print text here">
+      <button id="btnPrint">Print</button>
+    </div>
+
+    <div style="margin-top:8px">
+      <input id="freq" type="number" value="1500" style="width:120px" placeholder="freq(Hz)">
+      <input id="ms" type="number" value="200" style="width:120px" placeholder="ms">
+      <button id="btnBeepAdv">Beep(f,m)</button>
+    </div>
+
+    <div class="log" id="log"></div>
+  </div>
 </div>
 
-<div class="log" id="log"></div>
-
 <script>
-let client=null;
-let baseTopic="";
+let client=null, base="";
 
 function log(t){
-  let area=document.getElementById("log");
-  area.innerText = t + "\n" + area.innerText;
+  const area=document.getElementById("log");
+  const at=new Date().toLocaleTimeString();
+  area.innerText = "["+at+"] "+t + "\n" + area.innerText;
 }
 
 function connectMQTT(){
   const dev=document.getElementById("devId").value.trim();
-  baseTopic = "m5core2/"+dev;
+  if(!dev){ alert("Device ID empty"); return; }
+  base = "m5core2/"+dev;
 
-  client = new Paho.Client(
-    "broker.hivemq.com",
-    8884,
-    "/mqtt",
-    "webclient-"+Math.random().toString(16).slice(2)
-  );
+  const cid = "web-"+Math.random().toString(16).slice(2);
+  // ✅ HiveMQ WebSocket Secure
+  client = new Paho.Client("broker.hivemq.com", 8884, "/mqtt", cid);
 
-  client.onConnectionLost = ()=> log("Connection Lost");
-  client.onMessageArrived = (msg)=> log(msg.destinationName+" → "+msg.payloadString);
+  client.onConnectionLost = ()=>{ document.getElementById("status").innerText="Disconnected"; log("Connection lost"); };
+  client.onMessageArrived = (msg)=>{ log(msg.destinationName+" → "+msg.payloadString); };
+
+  document.getElementById("status").innerText="Connecting...";
 
   client.connect({
-    useSSL:true,
-    timeout:8,
+    useSSL:true, timeout:8,
     onSuccess: ()=>{
       document.getElementById("status").innerText="Connected";
-      log("Connected");
-
-      client.subscribe(baseTopic+"/events");
-      client.subscribe(baseTopic+"/telemetry");
-      log("Subscribed: "+baseTopic+"/events, "+baseTopic+"/telemetry");
+      client.subscribe(base+"/events");
+      client.subscribe(base+"/telemetry");
+      log("Subscribed: "+base+"/events, "+base+"/telemetry");
     },
-    onFailure:(e)=>{
+    onFailure: (e)=>{
       document.getElementById("status").innerText="Failed";
-      log("Connect failed: "+JSON.stringify(e));
+      log("Connect failed: "+(e.errorCode||"")+" "+(e.errorMessage||""));
     }
   });
 }
+
+document.getElementById("btnConn").onclick = connectMQTT;
+
+document.querySelectorAll('button[data-cmd]').forEach(btn=>{
+  btn.onclick = ()=>{
+    if(!client || document.getElementById("status").innerText!=="Connected"){ alert("Connect first"); return; }
+    const payload = btn.getAttribute("data-cmd");
+    const m = new Paho.Message(payload);
+    m.destinationName = base+"/cmd";
+    client.send(m);
+    log("→ "+base+"/cmd "+payload);
+  };
+});
+
+document.getElementById("btnPrint").onclick = ()=>{
+  if(!client || document.getElementById("status").innerText!=="Connected"){ alert("Connect first"); return; }
+  const text = document.getElementById("textMsg").value || "Hello from Web";
+  const payload = JSON.stringify({cmd:"print", text});
+  const m = new Paho.Message(payload);
+  m.destinationName = base+"/cmd";
+  client.send(m);
+  log("→ "+base+"/cmd "+payload);
+};
+
+document.getElementById("btnBeepAdv").onclick = ()=>{
+  if(!client || document.getElementById("status").innerText!=="Connected"){ alert("Connect first"); return; }
+  const f = parseInt(document.getElementById("freq").value||"1500",10);
+  const ms = parseInt(document.getElementById("ms").value||"200",10);
+  const payload = JSON.stringify({cmd:"beep", freq:f, ms:ms});
+  const m = new Paho.Message(payload);
+  m.destinationName = base+"/cmd";
+  client.send(m);
+  log("→ "+base+"/cmd "+payload);
+};
 </script>
 
 </body>
