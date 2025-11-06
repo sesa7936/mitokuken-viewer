@@ -1,153 +1,141 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>みとくけん / クラウド監視ビュー</title>
-  <style>
-    :root { --bg:#0f1115; --card:#141821; --text:#e6e8ef; --muted:#9aa3b2; --ok:#2ecc71; --warn:#f39c12; --bad:#e74c3c; }
-    html,body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"ヒラギノ角ゴ ProN","Hiragino Kaku Gothic ProN","Noto Sans JP","メイリオ",sans-serif}
-    .wrap{max-width:920px;margin:24px auto;padding:0 16px}
-    h1{font-size:22px;margin:8px 0 18px}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
-    .card{background:var(--card);border:1px solid #22283a;border-radius:14px;padding:16px}
-    .title{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-    .dot{width:10px;height:10px;border-radius:50%;background:#555}
-    .dot.ok{background:var(--ok)} .dot.stale{background:#555}
-    .kv{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;margin-top:10px}
-    .k{color:var(--muted)} .v{font-variant-numeric:tabular-nums}
-    .footer{color:var(--muted);font-size:12px;margin-top:18px}
-    a{color:#7abaff;text-decoration:none}
-    .muted{color:var(--muted)}
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>みとくけん・リアルタイム表示</title>
+<style>
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto;
+    margin: 20px;
+    background: #fafafa;
+  }
+  h1 {
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 20px;
+  }
+  .card {
+    border: 1px solid #ccc;
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 20px;
+    background: white;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  }
+  .card h2 {
+    margin: 0 0 10px;
+    font-size: 20px;
+  }
+  pre {
+    background: #f2f2f2;
+    padding: 10px;
+    border-radius: 5px;
+    white-space: pre-wrap;
+  }
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>みとくけん | クラウド監視ビュー</h1>
 
-    <div class="grid">
-      <div class="card" id="card-a">
-        <div class="title"><span class="dot" id="dot-a"></span><strong>A 機（Broadcaster）</strong></div>
-        <div class="kv">
-          <div class="k">状態</div><div class="v" id="state-a">—</div>
-          <div class="k">最終更新</div><div class="v" id="time-a">—</div>
-          <div class="k">合成加速度</div><div class="v" id="acc-a">—</div>
-          <div class="k">元データ</div><div class="v"><code id="raw-a" class="muted">—</code></div>
-        </div>
-      </div>
+<h1>みとくけん - リアルタイムモニター</h1>
 
-      <div class="card" id="card-b">
-        <div class="title"><span class="dot" id="dot-b"></span><strong>B 機（Receiver）</strong></div>
-        <div class="kv">
-          <div class="k">状態</div><div class="v" id="state-b">—</div>
-          <div class="k">最終更新</div><div class="v" id="time-b">—</div>
-          <div class="k">合成加速度</div><div class="v" id="acc-b">—</div>
-          <div class="k">元データ</div><div class="v"><code id="raw-b" class="muted">—</code></div>
-        </div>
-      </div>
-    </div>
+<!-- ▼ ここに A / B / Ping のカードが自動で挿入される -->
 
-    <div class="footer">
-      RTDB: <code id="db-url"></code> を1秒ごとにポーリング中。  
-      データ形式は <code>{"ts": 1730870000, "acc_g": 3.21}</code> を想定。  
-      ※ 公開用は後でルールを締めましょう（.read: true のみ等）。
-    </div>
-  </div>
+<script type="module">
 
-<script>
-  // ====== ★ ここだけあなたの RTDB URL にする（末尾スラッシュあり） ======
-  const DB_BASE = "https://segawa-77df6-default-rtdb.asia-southeast1.firebasedatabase.app/";
-  document.getElementById('db-url').textContent = DB_BASE;
+/* ----------------------------------------------------
+   Firebase SDK 読み込み
+---------------------------------------------------- */
+import { initializeApp } 
+  from "https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js";
+import { getDatabase, ref, onValue }
+  from "https://www.gstatic.com/firebasejs/12.5.0/firebase-database.js";
 
-  // 共通：JSON GET（読み取り専用 / 認証なし ＝ ルールで .read: true 前提）
-  async function readJson(path){
-    const url = DB_BASE + path + ".json";
-    const res = await fetch(url, {cache:"no-store"});
-    if(!res.ok) throw new Error(res.status + " " + res.statusText);
-    return await res.json();
+/* ----------------------------------------------------
+   Firebase 設定（あなたのプロジェクトの値）
+---------------------------------------------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyA12wibEkdgNQnASN5_gangMQS2OsToGRE",
+  authDomain: "segawa-77df6.firebaseapp.com",
+  databaseURL: "https://segawa-77df6-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "segawa-77df6",
+  storageBucket: "segawa-77df6.firebasestorage.app",
+  messagingSenderId: "929226250771",
+  appId: "1:929226250771:web:1e141ef1faaf71cd749a9",
+  measurementId: "G-RLD1RCRG49"
+};
+
+// Firebase 初期化
+const app = initializeApp(firebaseConfig);
+const db  = getDatabase(app);
+
+/* ----------------------------------------------------
+   UI カード生成
+---------------------------------------------------- */
+function ensureCard(id, title) {
+  let card = document.getElementById(id);
+  if (!card) {
+    card = document.createElement('div');
+    card.id = id;
+    card.className = 'card';
+
+    const h = document.createElement('h2');
+    h.textContent = title;
+
+    const pre = document.createElement('pre');
+    pre.textContent = '（読み込み中…）';
+
+    card.appendChild(h);
+    card.appendChild(pre);
+
+    document.body.appendChild(card);
   }
+  return card.querySelector('pre');
+}
 
-  function fmtTime(ts){
-    if(!ts) return "—";
-    // ts が秒の想定。ミリ秒が来ても自動補正
-    const ms = (ts < 2e12) ? ts * 1000 : ts;
-    const d = new Date(ms);
-    const pad = n => String(n).padStart(2,'0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  }
+/* A・B・Ping 画面要素を確保 */
+const preA   = ensureCard("card-a",   "A デバイス");
+const preB   = ensureCard("card-b",   "B デバイス");
+const prePing= ensureCard("card-ping","Ping / Liveness");
 
-  function updateCard(side, data){
-    const dot  = document.getElementById('dot-'+side);
-    const stEl = document.getElementById('state-'+side);
-    const tmEl = document.getElementById('time-'+side);
-    const acEl = document.getElementById('acc-'+side);
-    const rwEl = document.getElementById('raw-'+side);
-
-    if(!data){ // データ無し
-      dot.className = 'dot stale';
-      stEl.textContent = '未取得';
-      tmEl.textContent = '—';
-      acEl.textContent = '—';
-      rwEl.textContent = '—';
-      return;
+/* ----------------------------------------------------
+   整形用関数
+---------------------------------------------------- */
+function pretty(v) {
+  if (!v) return "（データなし）";
+  try {
+    const obj = { ...v };
+    if (obj.ts) {
+      obj.ts_readable = new Date(obj.ts).toLocaleString("ja-JP");
     }
-
-    const ts   = data.ts || 0;
-    const acc  = (data.acc_g !== undefined) ? Number(data.acc_g) : null;
-
-    // 10秒以内ならOK、それ以外はステール
-    const now = Date.now();
-    const ms  = (ts < 2e12) ? ts*1000 : ts;
-    const fresh = (now - ms) <= 10000;
-
-    dot.className = 'dot ' + (fresh ? 'ok' : 'stale');
-    stEl.textContent = fresh ? 'オンライン' : '更新停止';
-    tmEl.textContent = fmtTime(ts);
-    acEl.textContent = (acc===null || Number.isNaN(acc)) ? '—' : `${acc.toFixed(2)} g`;
-    rwEl.textContent = JSON.stringify(data);
+    return JSON.stringify(obj, null, 2);
+  } catch (e) {
+    return String(v);
   }
+}
 
-  async function tick(){
-    try {
-      const [a, b] = await Promise.all([
-        readJson("events/A"),
-        readJson("events/B")
-      ]);
-      updateCard('a', a);
-      updateCard('b', b);
-    } catch(e){
-      // ネットワーク等の一時エラーは無視して継続
-      console.warn(e);
-    }
-  }
+/* ----------------------------------------------------
+   Realtime Database を購読：A
+---------------------------------------------------- */
+onValue(ref(db, "devices/A"), (snap) => {
+  preA.textContent = pretty(snap.val());
+});
 
-  // 1秒ごとに更新
-  tick();
-  setInterval(tick, 1000);
+/* ----------------------------------------------------
+   Realtime Database を購読：B
+---------------------------------------------------- */
+onValue(ref(db, "devices/B"), (snap) => {
+  preB.textContent = pretty(snap.val());
+});
+
+/* ----------------------------------------------------
+   Realtime Database を購読：Ping
+---------------------------------------------------- */
+onValue(ref(db, "ping"), (snap) => {
+  prePing.textContent = pretty(snap.val());
+});
+
 </script>
-  <script type="module">
-  // Import the functions you need from the SDKs you need
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js";
-  import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.5.0/firebase-analytics.js";
-  // TODO: Add SDKs for Firebase products that you want to use
-  // https://firebase.google.com/docs/web/setup#available-libraries
 
-  // Your web app's Firebase configuration
-  // For Firebase JS SDK v7.20.0 and later, measurementId is optional
-  const firebaseConfig = {
-    apiKey: "AIzaSyA1zbw6kdqNQmAsNS_ganqMSO2SoToGreE",
-    authDomain: "segawa-77df6.firebaseapp.com",
-    databaseURL: "https://segawa-77df6-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "segawa-77df6",
-    storageBucket: "segawa-77df6.firebasestorage.app",
-    messagingSenderId: "929226057071",
-    appId: "1:929226057071:web:1e14f1ef1f4aaf71cd749a",
-    measurementId: "G-RL1DCRRG49"
-  };
-
-  // Initialize Firebase
-  const app = initializeApp(firebaseConfig);
-  const analytics = getAnalytics(app);
-</script>
 </body>
 </html>
