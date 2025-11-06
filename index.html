@@ -4,102 +4,117 @@
   <meta charset="utf-8" />
   <title>Core2 Dashboard</title>
   <style>
-    body { font-family: system-ui, sans-serif; padding: 16px; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 16px; background:#0f172a; color:#e2e8f0; }
     .row { display: flex; gap: 20px; flex-wrap: wrap; }
-    .card { border: 1px solid #ccc; border-radius: 10px; padding: 12px; min-width: 280px; }
-    label { display:block; margin-top:8px; }
-    input[type=text], input[type=number] { width: 100%; padding:6px; }
-    button { padding: 8px 12px; margin-top: 8px; }
-    pre { white-space: pre-wrap; word-break: break-word; }
+    .card { border: 1px solid #334155; border-radius: 12px; padding: 14px; min-width: 300px; background:#111827; }
+    label { display:block; margin-top:8px; font-size:14px; color:#94a3b8; }
+    input[type=text], input[type=number] { width: 100%; padding:8px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e2e8f0; }
+    button { padding: 10px 14px; margin-top: 10px; border:0; border-radius:10px; background:#2563eb; color:white; cursor:pointer; }
+    button:disabled { background:#475569; cursor:not-allowed; }
+    pre { white-space: pre-wrap; word-break: break-word; background:#0b1220; border:1px solid #334155; border-radius:8px; padding:8px; }
+    code { color:#93c5fd; }
   </style>
 </head>
 <body>
-  <h1>M5Stack Core2 Dashboard</h1>
+  <h1>Core2 ダッシュボード（固定ID版）</h1>
 
   <div class="row">
     <div class="card">
       <h3>接続設定</h3>
-      <label>WebSocket URL（例: <code>wss://broker.hivemq.com:8884/mqtt</code>）</label>
+      <label>WebSocket（HiveMQ WSS）</label>
       <input id="wsUrl" type="text" value="wss://broker.hivemq.com:8884/mqtt" />
       <label>デバイスID</label>
-      <input id="deviceId" type="text" placeholder="core2-xxxxxxxx" />
+      <input id="deviceId" type="text" value="core2-1fd62104" />
       <button id="btnConnect">接続</button>
-      <div id="status">未接続</div>
+      <div id="status" style="margin-top:8px;">未接続</div>
+      <div style="margin-top:8px; font-size:12px; color:#94a3b8;">予備：<code>wss://broker.emqx.io:8084/mqtt</code></div>
     </div>
 
     <div class="card">
-      <h3>受信（テレメトリ）</h3>
+      <h3>受信ログ</h3>
       <div>Subscribe Topic: <code id="subTopic">-</code></div>
-      <pre id="telemetry" style="height:160px; overflow:auto;"></pre>
+      <pre id="telemetry" style="height:220px; overflow:auto;">（まだありません）</pre>
     </div>
 
     <div class="card">
-      <h3>送信（コマンド）</h3>
+      <h3>送信（Web → Core2）</h3>
       <div>Publish Topic: <code id="pubTopic">-</code></div>
-      <label>アクション</label>
+      <label>action</label>
       <input id="action" type="text" value="beep" />
       <label>freq</label>
       <input id="freq" type="number" value="1500" />
       <label>ms</label>
       <input id="ms" type="number" value="200" />
-      <button id="btnSend">送信</button>
+      <button id="btnSend" disabled>テスト音を鳴らす</button>
+    </div>
+
+    <div class="card">
+      <h3>エラー/詳細</h3>
+      <pre id="err" style="height:120px; overflow:auto;"></pre>
     </div>
   </div>
 
-  <!-- Paho MQTT JS（公式CDN） -->
   <script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
   <script>
     let client = null;
     let subTopic = "";
     let pubTopic = "";
+    const $ = (id) => document.getElementById(id);
+    const logErr = (m) => { const e=$('err'); e.textContent=(m+"\n"+e.textContent).slice(0,8000); };
+    const logTel = (m) => { const t=$('telemetry'); t.textContent=(m+"\n"+t.textContent).slice(0,8000); };
 
-    function logTelemetry(line) {
-      const pre = document.getElementById('telemetry');
-      pre.textContent = (line + "\n" + pre.textContent).slice(0, 8000);
-    }
-
-    document.getElementById('btnConnect').onclick = () => {
-      const wsUrl   = document.getElementById('wsUrl').value.trim();
-      const deviceId= document.getElementById('deviceId').value.trim();
-      if (!wsUrl || !deviceId) { alert("WS URLとDevice IDを入れてね"); return; }
+    $('btnConnect').onclick = () => {
+      const wsUrl    = $('wsUrl').value.trim();
+      const deviceId = $('deviceId').value.trim(); // ← core2-1fd62104
+      if (!wsUrl || !deviceId) { alert('WS URLとDevice IDを入れてね'); return; }
 
       subTopic = `lab/core2/${deviceId}/telemetry`;
       pubTopic = `lab/core2/${deviceId}/cmd`;
-      document.getElementById('subTopic').textContent = subTopic;
-      document.getElementById('pubTopic').textContent = pubTopic;
+      $('subTopic').textContent = subTopic;
+      $('pubTopic').textContent = pubTopic;
 
-      // 一意なクライアントID
       const cid = "web-" + Math.random().toString(16).slice(2);
       client = new Paho.MQTT.Client(wsUrl, cid);
 
       client.onConnectionLost = (res) => {
-        document.getElementById('status').textContent = "切断: " + res.errorMessage;
-      };
-      client.onMessageArrived = (msg) => {
-        if (msg.destinationName === subTopic) {
-          logTelemetry(msg.payloadString);
-        }
+        $('status').textContent = "切断: " + (res?.errorMessage || "");
+        logErr("onConnectionLost: " + (res?.errorMessage || ""));
+        $('btnSend').disabled = true;
       };
 
+      client.onMessageArrived = (msg) => {
+        if (msg.destinationName === subTopic) logTel(msg.payloadString);
+      };
+
+      $('status').textContent = "接続中…";
       client.connect({
         useSSL: wsUrl.startsWith("wss://"),
-        timeout: 5,
+        mqttVersion: 4,           // ← 重要（3.1.1）
+        cleanSession: true,
+        keepAliveInterval: 45,
+        reconnect: true,
+        timeout: 10,
         onSuccess: () => {
-          document.getElementById('status').textContent = "接続OK";
+          $('status').textContent = "接続OK";
           client.subscribe(subTopic);
+          $('btnSend').disabled = false;
         },
         onFailure: (err) => {
-          document.getElementById('status').textContent = "接続失敗: " + err.errorMessage;
+          const emsg = "接続失敗: " + (err?.errorMessage || "");
+          $('status').textContent = emsg;
+          logErr(emsg);
         }
       });
     };
 
-    document.getElementById('btnSend').onclick = () => {
+    $('btnSend').onclick = () => {
       if (!client || !client.isConnected()) { alert("未接続です"); return; }
-      const action = document.getElementById('action').value.trim();
-      const freq   = Number(document.getElementById('freq').value);
-      const ms     = Number(document.getElementById('ms').value);
-      const payload = JSON.stringify({ action, freq, ms, ts: Date.now() });
+      const payload = JSON.stringify({
+        action: $('action').value.trim(),
+        freq: Number($('freq').value),
+        ms: Number($('ms').value),
+        ts: Date.now()
+      });
       const msg = new Paho.MQTT.Message(payload);
       msg.destinationName = pubTopic;
       client.send(msg);
