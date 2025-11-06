@@ -1,131 +1,72 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>M5Core2 ↔ Web（MQTT/WSS:HiveMQ）テスト</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>M5Core2 MQTT Dashboard</title>
+
+  <!-- ✅ Paho MQTT 読み込み（絶対必要） -->
+  <script src="https://unpkg.com/paho-mqtt/paho-mqtt.min.js"></script>
+
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto;color:#e5e7eb;background:#0f172a;margin:0;padding:24px}
-    .row{display:flex;gap:16px;flex-wrap:wrap}
-    .card{background:#111827;border:1px solid #334155;border-radius:12px;padding:16px;min-width:320px;flex:1}
-    input,button{padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb}
-    button{border:0;background:#1f2937;cursor:pointer}
-    .log{height:280px;overflow:auto;background:#0b1220;border:1px solid #334155;border-radius:8px;padding:10px;font-family:ui-monospace,Menlo,Consolas,monospace}
-    label{font-size:12px;color:#94a3b8}
-    .muted{color:#94a3b8;font-size:12px}
+    body{background:#0f172a;color:#e2e8f0;font-family:system-ui;padding:20px;}
+    input,button{padding:10px;margin:5px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:white;}
+    .log{height:300px;overflow:auto;background:#0b1220;padding:10px;border-radius:8px;}
   </style>
 </head>
 <body>
-  <h2>M5Core2 ↔ Web（MQTT/WSS: HiveMQ）テスト</h2>
 
-  <div class="row">
-    <div class="card" style="max-width:480px">
-      <label>Device ID（Core2と合わせる）</label>
-      <input id="devId" value="segawa-core2-01" />
-      <div style="margin-top:8px">
-        <button id="btnConn">Connect</button>
-        <span id="status" style="margin-left:8px;color:#93c5fd">Disconnected</span>
-      </div>
-      <div class="muted" style="margin-top:8px">
-        Broker (fixed): <code>wss://broker.hivemq.com:8884/mqtt</code>
-      </div>
+<h2>M5Core2 ↔ Web（HiveMQ WSS）</h2>
 
-      <div style="margin-top:16px">
-        <div class="muted">Send Command</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-          <button data-cmd='{"cmd":"beep"}'>Beep</button>
-          <button data-cmd='{"cmd":"flash"}'>Flash</button>
-          <input id="textMsg" placeholder="表示するテキスト" style="flex:1;min-width:140px"/>
-          <button id="btnPrint">Print</button>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-          <input id="freq" type="number" placeholder="freq(Hz)" value="1500" style="width:120px"/>
-          <input id="ms"   type="number" placeholder="ms" value="200" style="width:100px"/>
-          <button id="btnBeepAdv">Beep(f,m)</button>
-        </div>
-      </div>
-    </div>
+<div>
+  Device ID:
+  <input id="devId" value="segawa-core2-01">
+  <button onclick="connectMQTT()">Connect</button>
+  <span id="status">Disconnected</span>
+</div>
 
-    <div class="card">
-      <div class="muted">Events / Telemetry</div>
-      <div id="log" class="log"></div>
-    </div>
-  </div>
+<div class="log" id="log"></div>
 
-  <script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
-  <script>
-    const WSS_HOST = 'broker.hivemq.com';
-    const WSS_PORT = 8884;            // WSS
-    const statusEl = document.getElementById('status');
-    const logEl = document.getElementById('log');
-    const devIdEl = document.getElementById('devId');
-    let client = null;
-    let base = null;
+<script>
+let client=null;
+let baseTopic="";
 
-    function log(line){
-      const t = new Date().toLocaleTimeString();
-      logEl.innerText = `[${t}] ${line}\n` + logEl.innerText;
+function log(t){
+  let area=document.getElementById("log");
+  area.innerText = t + "\n" + area.innerText;
+}
+
+function connectMQTT(){
+  const dev=document.getElementById("devId").value.trim();
+  baseTopic = "m5core2/"+dev;
+
+  client = new Paho.Client(
+    "broker.hivemq.com",
+    8884,
+    "/mqtt",
+    "webclient-"+Math.random().toString(16).slice(2)
+  );
+
+  client.onConnectionLost = ()=> log("Connection Lost");
+  client.onMessageArrived = (msg)=> log(msg.destinationName+" → "+msg.payloadString);
+
+  client.connect({
+    useSSL:true,
+    timeout:8,
+    onSuccess: ()=>{
+      document.getElementById("status").innerText="Connected";
+      log("Connected");
+
+      client.subscribe(baseTopic+"/events");
+      client.subscribe(baseTopic+"/telemetry");
+      log("Subscribed: "+baseTopic+"/events, "+baseTopic+"/telemetry");
+    },
+    onFailure:(e)=>{
+      document.getElementById("status").innerText="Failed";
+      log("Connect failed: "+JSON.stringify(e));
     }
+  });
+}
+</script>
 
-    function connect(){
-      const devId = devIdEl.value.trim();
-      if(!devId){ alert('Device ID を入力'); return; }
-      base = `m5core2/${devId}`;
-      const cid = 'web-' + Math.random().toString(16).slice(2);
-
-      client = new Paho.MQTT.Client(WSS_HOST, WSS_PORT, '/mqtt', cid);
-      client.onConnectionLost = (res)=>{ statusEl.textContent='Disconnected'; log('Connection lost'); }
-      client.onMessageArrived = (msg)=>{ log(`${msg.destinationName} ${msg.payloadString}`); };
-
-      statusEl.textContent='Connecting...';
-      client.connect({
-        useSSL:true, timeout:8,
-        onSuccess: ()=>{
-          statusEl.textContent='Connected';
-          const topics = [`${base}/events`, `${base}/telemetry`];
-          topics.forEach(tp=> client.subscribe(tp));
-          log('Subscribed: ' + topics.join(', '));
-        },
-        onFailure: (err)=>{ statusEl.textContent='Failed'; log('Connect failed: '+ JSON.stringify(err)); }
-      });
-    }
-
-    document.getElementById('btnConn').onclick = connect;
-
-    // 固定コマンド
-    document.querySelectorAll('button[data-cmd]').forEach(btn=>{
-      btn.onclick = ()=>{
-        if(!client || statusEl.textContent!=='Connected'){ alert('Connect first'); return; }
-        const cmd = btn.getAttribute('data-cmd');
-        const m = new Paho.MQTT.Message(cmd);
-        m.destinationName = `${base}/cmd`;
-        client.send(m);
-        log(`→ ${base}/cmd ${cmd}`);
-      };
-    });
-
-    // Print（任意文字列）
-    document.getElementById('btnPrint').onclick = ()=>{
-      if(!client || statusEl.textContent!=='Connected'){ alert('Connect first'); return; }
-      const text = document.getElementById('textMsg').value || 'Hello from Web';
-      const payload = JSON.stringify({cmd:'print', text});
-      const m = new Paho.MQTT.Message(payload);
-      m.destinationName = `${base}/cmd`;
-      client.send(m);
-      log(`→ ${base}/cmd ${payload}`);
-    };
-
-    // Beep（周波数・長さ指定）
-    document.getElementById('btnBeepAdv').onclick = ()=>{
-      if(!client || statusEl.textContent!=='Connected'){ alert('Connect first'); return; }
-      const freq = parseInt(document.getElementById('freq').value||'1500',10);
-      const ms   = parseInt(document.getElementById('ms').value||'200',10);
-      const payload = JSON.stringify({cmd:'beep', freq, ms});
-      const m = new Paho.MQTT.Message(payload);
-      m.destinationName = `${base}/cmd`;
-      client.send(m);
-      log(`→ ${base}/cmd ${payload}`);
-    };
-  </script>
 </body>
 </html>
