@@ -25,8 +25,8 @@
       <input id="wsUrl" type="text" value="wss://broker.hivemq.com:8884/mqtt" />
       <label>デバイスID</label>
       <input id="deviceId" type="text" value="core2-1fd62104" />
-      <button id="btnConnect">接続</button>
-      <div id="status" style="margin-top:8px;">未接続</div>
+      <button id="btnConnect" disabled>接続</button>
+      <div id="status" style="margin-top:8px;">ライブラリ読込中…</div>
       <div style="margin-top:8px; font-size:12px; color:#94a3b8;">予備：<code>wss://broker.emqx.io:8084/mqtt</code></div>
     </div>
 
@@ -54,7 +54,36 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
+  <!-- ✅ PahoをCDN冗長化：unpkg → 失敗時は jsDelivr に自動切替 -->
+  <script>
+    (function loadPaho() {
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/paho-mqtt/mqttws31.min.js';
+      s.defer = true;
+      s.onload = () => {
+        document.getElementById('status').textContent = 'ライブラリ読込OK';
+        document.getElementById('btnConnect').disabled = false;
+      };
+      s.onerror = () => {
+        const f = document.createElement('script');
+        // jsDelivr の代替（バージョン固定で安定）
+        f.src = 'https://cdn.jsdelivr.net/npm/paho-mqtt@1.1.0/paho-mqtt-min.js';
+        f.defer = true;
+        f.onload = () => {
+          document.getElementById('status').textContent = 'ライブラリ読込OK（fallback）';
+          document.getElementById('btnConnect').disabled = false;
+        };
+        f.onerror = () => {
+          document.getElementById('status').textContent = 'Pahoの読み込みに失敗しました。拡張機能やネットワーク設定を確認してください。';
+          const e = document.getElementById('err');
+          e.textContent = 'CDN読み込み失敗: unpkg / jsDelivr の両方に接続できませんでした。';
+        };
+        document.head.appendChild(f);
+      };
+      document.head.appendChild(s);
+    })();
+  </script>
+
   <script>
     let client = null;
     let subTopic = "";
@@ -64,8 +93,15 @@
     const logTel = (m) => { const t=$('telemetry'); t.textContent=(m+"\n"+t.textContent).slice(0,8000); };
 
     $('btnConnect').onclick = () => {
+      // まだPahoが無ければ弾く（ガード）
+      if (typeof window.Paho === 'undefined') {
+        logErr('Paho is not defined（ライブラリが読み込めていません）');
+        $('status').textContent = 'Paho未読込';
+        return;
+      }
+
       const wsUrl    = $('wsUrl').value.trim();
-      const deviceId = $('deviceId').value.trim(); // ← core2-1fd62104
+      const deviceId = $('deviceId').value.trim();
       if (!wsUrl || !deviceId) { alert('WS URLとDevice IDを入れてね'); return; }
 
       subTopic = `lab/core2/${deviceId}/telemetry`;
@@ -89,7 +125,7 @@
       $('status').textContent = "接続中…";
       client.connect({
         useSSL: wsUrl.startsWith("wss://"),
-        mqttVersion: 4,           // ← 重要（3.1.1）
+        mqttVersion: 4,           // MQTT 3.1.1
         cleanSession: true,
         keepAliveInterval: 45,
         reconnect: true,
