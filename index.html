@@ -1,141 +1,156 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>みとくけん・リアルタイム表示</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>みとくけん ダッシュボード</title>
+
+<!-- MQTT.js (browser) -->
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
 <style>
-  body {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto;
-    margin: 20px;
-    background: #fafafa;
-  }
-  h1 {
-    font-size: 24px;
-    font-weight: bold;
-    margin-bottom: 20px;
-  }
-  .card {
-    border: 1px solid #ccc;
-    border-radius: 10px;
-    padding: 15px;
-    margin-bottom: 20px;
-    background: white;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-  }
-  .card h2 {
-    margin: 0 0 10px;
-    font-size: 20px;
-  }
-  pre {
-    background: #f2f2f2;
-    padding: 10px;
-    border-radius: 5px;
-    white-space: pre-wrap;
-  }
+  :root { --ok:#0aa84f; --warn:#c62828; --bg:#0b0e12; --card:#12161c; --text:#e8eef6; }
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;}
+  header{padding:16px 20px;border-bottom:1px solid #1e2630;}
+  main{max-width:900px;margin:0 auto;padding:24px 16px;display:grid;gap:16px;}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .card{background:var(--card);border:1px solid #1e2630;border-radius:14px;padding:18px;}
+  .title{font-weight:700;font-size:18px;margin:0 0 6px}
+  .muted{opacity:.7;font-size:13px;margin:0 0 8px}
+  .status{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .dot{width:12px;height:12px;border-radius:999px;background:#999}
+  .dot.ok{background:var(--ok)}
+  .dot.bad{background:var(--warn);animation:blink 0.8s infinite}
+  @keyframes blink{50%{opacity:.4}}
+  #bigAlert{position:fixed;inset:0;pointer-events:none;opacity:0;background:rgba(198,40,40,.20);transition:opacity .12s}
+  #bigAlert.show{opacity:1}
+  button{background:#1f2937;color:#e8eef6;border:1px solid #324055;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+  button:hover{filter:brightness(1.15)}
+  code{background:#0f141a;padding:2px 6px;border-radius:6px}
+  .log{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap}
 </style>
-</head>
-<body>
 
-<h1>みとくけん - リアルタイムモニター</h1>
+<header>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <h1 style="font-size:20px;margin:0">みとくけん ダッシュボード</h1>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="btnNotify">🔔 通知ON</button>
+      <button id="btnTest">デモ警報</button>
+    </div>
+  </div>
+  <div class="muted">MQTT: <code>wss://test.mosquitto.org:8081/mqtt</code> / Topic: <code>mitokuken/alert</code>, <code>mitokuken/ack</code></div>
+</header>
 
-<!-- ▼ ここに A / B / Ping のカードが自動で挿入される -->
+<main>
+  <div class="row">
+    <section class="card">
+      <h2 class="title">受信状態</h2>
+      <div class="muted">A 機（衝撃検知） / B 機（解除）</div>
+      <div class="status"><span class="dot" id="dotConn"></span><span id="txtConn">接続中…</span></div>
+      <div class="status"><span class="dot" id="dotA"></span><span id="txtA">A: 待機</span></div>
+      <div class="status"><span class="dot" id="dotB"></span><span id="txtB">B: 待機</span></div>
+    </section>
+    <section class="card">
+      <h2 class="title">最新イベント</h2>
+      <div id="lastEvent" class="muted">—</div>
+      <audio id="beep" preload="auto">
+        <source src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABYBHQAA" type="audio/wav">
+      </audio>
+    </section>
+  </div>
+  <section class="card">
+    <h2 class="title">ログ</h2>
+    <div id="log" class="log"></div>
+  </section>
+</main>
 
-<script type="module">
+<div id="bigAlert"></div>
 
-/* ----------------------------------------------------
-   Firebase SDK 読み込み
----------------------------------------------------- */
-import { initializeApp } 
-  from "https://www.gstatic.com/firebasejs/12.5.0/firebase-app.js";
-import { getDatabase, ref, onValue }
-  from "https://www.gstatic.com/firebasejs/12.5.0/firebase-database.js";
+<script>
+/** ========= 設定 ========= **/
+const MQTT_URL   = "wss://test.mosquitto.org:8081/mqtt";   // TLS WebSocket
+const TOPIC_ALERT= "mitokuken/alert";  // A 機 → 衝撃
+const TOPIC_ACK  = "mitokuken/ack";    // B 機 → 解除（※後述のBパッチ）
 
-/* ----------------------------------------------------
-   Firebase 設定（あなたのプロジェクトの値）
----------------------------------------------------- */
-const firebaseConfig = {
-  apiKey: "AIzaSyA12wibEkdgNQnASN5_gangMQS2OsToGRE",
-  authDomain: "segawa-77df6.firebaseapp.com",
-  databaseURL: "https://segawa-77df6-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "segawa-77df6",
-  storageBucket: "segawa-77df6.firebasestorage.app",
-  messagingSenderId: "929226250771",
-  appId: "1:929226250771:web:1e141ef1faaf71cd749a9",
-  measurementId: "G-RLD1RCRG49"
+/** ========= UI 参照 ========= **/
+const dotConn = document.getElementById('dotConn');
+const dotA    = document.getElementById('dotA');
+const dotB    = document.getElementById('dotB');
+const txtConn = document.getElementById('txtConn');
+const txtA    = document.getElementById('txtA');
+const txtB    = document.getElementById('txtB');
+const lastEvent = document.getElementById('lastEvent');
+const logEl   = document.getElementById('log');
+const bigAlert= document.getElementById('bigAlert');
+const beepEl  = document.getElementById('beep');
+
+function log(s){ const t=`[${new Date().toLocaleTimeString()}] ${s}\n`; logEl.textContent = t + logEl.textContent.slice(0, 6000); }
+
+function setDot(el, ok){ el.classList.remove('ok','bad'); el.classList.add(ok?'ok':'bad'); }
+
+function flashAlert(ms=1200){
+  bigAlert.classList.add('show');
+  setTimeout(()=>bigAlert.classList.remove('show'), ms);
+}
+
+async function notify(title, body){
+  try{
+    if(Notification.permission==='granted'){
+      new Notification(title,{body});
+    }
+  }catch(e){}
+}
+
+document.getElementById('btnNotify').onclick = async ()=>{
+  if(Notification.permission!=='granted') await Notification.requestPermission();
+  alert('通知を許可しました（ブラウザの設定でいつでも変更できます）。');
 };
 
-// Firebase 初期化
-const app = initializeApp(firebaseConfig);
-const db  = getDatabase(app);
+document.getElementById('btnTest').onclick = ()=>{
+  onAlert({src:'DEMO', accel:1.88, ts:Date.now()});
+};
 
-/* ----------------------------------------------------
-   UI カード生成
----------------------------------------------------- */
-function ensureCard(id, title) {
-  let card = document.getElementById(id);
-  if (!card) {
-    card = document.createElement('div');
-    card.id = id;
-    card.className = 'card';
+/** ========= MQTT 接続 ========= **/
+const clientId = "dash_" + Math.random().toString(16).slice(2);
+const client = mqtt.connect(MQTT_URL, { clientId, clean:true, reconnectPeriod: 1500 });
 
-    const h = document.createElement('h2');
-    h.textContent = title;
+client.on('connect', ()=>{
+  setDot(dotConn,true); txtConn.textContent = "接続 OK";
+  client.subscribe([TOPIC_ALERT, TOPIC_ACK], { qos:0 }, (err)=> {
+    if(err){ log("subscribe error: "+err); }
+    else { log("Subscribed: " + TOPIC_ALERT + ", " + TOPIC_ACK); }
+  });
+});
 
-    const pre = document.createElement('pre');
-    pre.textContent = '（読み込み中…）';
+client.on('reconnect', ()=>{ setDot(dotConn,false); txtConn.textContent = "再接続中…"; });
+client.on('close', ()=>{ setDot(dotConn,false); txtConn.textContent = "切断"; });
+client.on('error', (e)=> log("MQTT error: "+e.message));
 
-    card.appendChild(h);
-    card.appendChild(pre);
+client.on('message', (topic, payload)=>{
+  let s = payload.toString();
+  log(`RX ${topic}: ${s}`);
 
-    document.body.appendChild(card);
+  try{
+    const j = JSON.parse(s);
+    if (topic === TOPIC_ALERT) onAlert(j);
+    if (topic === TOPIC_ACK)   onAck(j);
+  }catch{
+    // JSONでない場合は簡易扱い
+    if (topic === TOPIC_ALERT) onAlert({src:'A?', accel:NaN, ts:Date.now(), raw:s});
+    if (topic === TOPIC_ACK)   onAck({src:'B?', ts:Date.now(), raw:s});
   }
-  return card.querySelector('pre');
+});
+
+function onAlert(ev){
+  setDot(dotA,false); txtA.textContent = `A: 衝撃！ g=${ev.accel??'?'}`;
+  lastEvent.textContent = `A 衝撃 g=${ev.accel??'?'}  @ ${new Date(ev.ts||Date.now()).toLocaleString()}`;
+  flashAlert();
+  try{ beepEl.currentTime=0; beepEl.play(); }catch(e){}
+  notify("⚠ 衝撃を検知", `g=${ev.accel ?? '?'}`);
 }
 
-/* A・B・Ping 画面要素を確保 */
-const preA   = ensureCard("card-a",   "A デバイス");
-const preB   = ensureCard("card-b",   "B デバイス");
-const prePing= ensureCard("card-ping","Ping / Liveness");
-
-/* ----------------------------------------------------
-   整形用関数
----------------------------------------------------- */
-function pretty(v) {
-  if (!v) return "（データなし）";
-  try {
-    const obj = { ...v };
-    if (obj.ts) {
-      obj.ts_readable = new Date(obj.ts).toLocaleString("ja-JP");
-    }
-    return JSON.stringify(obj, null, 2);
-  } catch (e) {
-    return String(v);
-  }
+function onAck(ev){
+  setDot(dotB,true); txtB.textContent = "B: 解除";
+  lastEvent.textContent = `B 解除 @ ${new Date(ev.ts||Date.now()).toLocaleString()}`;
 }
-
-/* ----------------------------------------------------
-   Realtime Database を購読：A
----------------------------------------------------- */
-onValue(ref(db, "devices/A"), (snap) => {
-  preA.textContent = pretty(snap.val());
-});
-
-/* ----------------------------------------------------
-   Realtime Database を購読：B
----------------------------------------------------- */
-onValue(ref(db, "devices/B"), (snap) => {
-  preB.textContent = pretty(snap.val());
-});
-
-/* ----------------------------------------------------
-   Realtime Database を購読：Ping
----------------------------------------------------- */
-onValue(ref(db, "ping"), (snap) => {
-  prePing.textContent = pretty(snap.val());
-});
-
 </script>
-
-</body>
 </html>
